@@ -118,7 +118,7 @@ To load all chains for the multichain complex use cases,
 ```
 structure = esm.inverse_folding.util.load_structure(fpath, chain_ids)
 coords, native_seqs = esm.inverse_folding.multichain_util.extract_coords_from_complex(structure)
-```tst
+```
 
 ### Example Jupyter notebook
 See `examples/inverse_folding/notebook.ipynb` for examples of sampling sequences, 
