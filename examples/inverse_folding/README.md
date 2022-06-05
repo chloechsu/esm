@@ -53,13 +53,28 @@ The sampled sequences will be saved in a fasta format to the specified output fi
 
 **By default, the script only loads the backbone of the specified target chain 
 as model input.** To instead use the entire complex backbone as model input for 
-conditioning, use the `--multichain-backbone` flag to load all chains.
+conditioning, use the `--multichain-backbone` flag to load all chains. 
+```
+python sample_sequences.py data/5YH2.pdb \
+    --chain C --temperature 1 --num-samples 3 \
+    --outpath output/sampled_sequences_multichain.fasta \
+    --multichain-backbone
+```
 
 The temperature parameter controls the sharpness of the probability
 distribution for sequence sampling. Higher sampling temperatures yield more
 diverse sequences but likely with lower native sequence recovery.
 The default sampling temperature is 1. To optimize for native sequence
 recovery, we recommend sampling with low temperature such as 1e-6.
+
+**We recommend trying both the single-chain and multi-chain design modes.** While in
+our paper we showed that conditioning on the entire multi-chain backbone often
+reduces perplexity and increases sequence recovery, on some proteins the
+single-chain performance is better.
+
+Sometimes, one failure mode in sampled sequences is a high number of repeated
+amino acids, e.g. `EEEEEEEE`. We recommend checking for that and filtering out
+sampled sequences with long repeats.
 
 ### Scoring sequences
 To score the conditional log-likelihoods for sequences conditioned on a given
@@ -80,6 +95,17 @@ The output values are the average log-likelihoods averaged over all amino acids 
 **By default, the script only loads the backbone of the specified target chain 
 as model input.** To instead use the entire complex backbone as model input for 
 conditioning, use the `--multichain-backbone` flag to load all chains.
+```
+python score_log_likelihoods.py data/5YH2.pdb \
+    data/5YH2_mutated_seqs.fasta --chain C \
+    --outpath output/5YH2_mutated_seqs_scores.csv \
+    --multichain-backbone
+```
+
+We recommend trying both the single-chain and multi-chain design modes. While in
+our paper we showed that conditioning on the entire multi-chain backbone often
+reduces perplexity and increases sequence recovery, on some proteins the
+single-chain performance is better.
 
 ## General usage
 
