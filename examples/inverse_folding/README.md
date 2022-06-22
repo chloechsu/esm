@@ -53,7 +53,9 @@ The sampled sequences will be saved in a fasta format to the specified output fi
 
 **By default, the script only loads the backbone of the specified target chain 
 as model input.** To instead use the entire complex backbone as model input for 
-conditioning, use the `--multichain-backbone` flag to load all chains. 
+conditioning, use the `--multichain-backbone` flag to load all chains. (In the
+example below, the encoder loads the backbone of all chains as input to the
+encoder, and the decoder samples sequences for chain C.)
 ```
 python sample_sequences.py data/5YH2.pdb \
     --chain C --temperature 1 --num-samples 3 \
@@ -94,7 +96,9 @@ The output values are the average log-likelihoods averaged over all amino acids 
 
 **By default, the script only loads the backbone of the specified target chain 
 as model input.** To instead use the entire complex backbone as model input for 
-conditioning, use the `--multichain-backbone` flag to load all chains.
+conditioning, use the `--multichain-backbone` flag to load all chains. (In the
+example below, the encoder loads the backbone of all chains as input to the
+encoder, and the decoder scores sequences for chain C.)
 ```
 python score_log_likelihoods.py data/5YH2.pdb \
     data/5YH2_mutated_seqs.fasta --chain C \
@@ -118,7 +122,7 @@ tokens encoded by the model.
 dropout from training mode for best performance.
 
 ```
-import esm
+import esm.inverse_folding
 model, alphabet = esm.pretrained.esm_if1_gvp4_t16_142M_UR50()
 model = model.eval()
 ```
@@ -135,13 +139,14 @@ be of shape L x 3 x 3, where L is the number of amino acids in the structure.
 To load a single chain from PDB and mmCIF file formats and extract the backbone
 coordinates of the N, CA, C atoms as model input,
 ```
-import esm
+import esm.inverse_folding
 structure = esm.inverse_folding.util.load_structure(fpath, chain_id)
 coords, seq = esm.inverse_folding.util.extract_coords_from_structure(structure)
 ```
 Note this only loads the specified chain.
 
-To load all chains for the multichain complex use cases,
+To load multiple chains for the multichain complex use cases, list all chain ids
+when loading the structure, e.g. `chain_ids = ['A', 'B', 'C']`:
 ```
 structure = esm.inverse_folding.util.load_structure(fpath, chain_ids)
 coords, native_seqs = esm.inverse_folding.multichain_util.extract_coords_from_complex(structure)
@@ -172,9 +177,10 @@ where `coords` is an array as described in the above section on input format.
 
 To sample sequences for a given chain in a multichain complex,
 ```
-import esm
+import esm.inverse_folding
 sampled_seq = esm.inverse_folding.multichain_util.sample_sequence_in_complex(
-    model, coords, target_chain_id, temperature=T)
+    model, coords, target_chain_id, temperature=T
+)
 ```
 where `coords` is a dictionary mapping chain ids to backbone coordinate arrays.
 
@@ -200,7 +206,8 @@ missing backbone coordinates.
 For multichain complexes,
 ```
 ll_fullseq, ll_withcoord = esm.inverse_folding.multichain_util.score_sequence_in_complex(
-    model, alphabet, coords, target_chain_id, target_seq)
+    model, alphabet, coords, target_chain_id, target_seq
+)
 ```
 where `coords` is a dictionary mapping chain ids to backbone coordinate arrays. 
 
@@ -222,7 +229,9 @@ shape L x 512.
 
 Or, for multichain complex,
 ```
-rep = esm.inverse_folding.multichain_util.get_encoder_output_for_complex(model, alphabet, coords, target_chain_id)
+rep = esm.inverse_folding.multichain_util.get_encoder_output_for_complex(
+    model, alphabet, coords, target_chain_id
+)
 ```
 
 That's it for now, have fun!
