@@ -56,7 +56,6 @@ def load_structure(fpath, chain=None):
             raise ValueError(f'Chain {chain} not found in input file')
     chain_filter = [a.chain_id in chain_ids for a in structure]
     structure = structure[chain_filter]
-    print(f'Loaded chains {chain_ids}\n')
     return structure
 
 
