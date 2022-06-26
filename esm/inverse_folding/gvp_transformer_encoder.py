@@ -78,18 +78,17 @@ class GVPTransformerEncoder(nn.Module):
             confidence: confidence scores between 0 and 1 of shape length
         """
         components = dict()
-        coord_mask = torch.all(torch.all(torch.isfinite(coords), dim=-1), dim=-1)
-        coords = nan_to_num(coords)
         mask_tokens = (
             padding_mask * self.dictionary.padding_idx + 
             ~padding_mask * self.dictionary.get_idx("<mask>")
         )
         components["tokens"] = self.embed_tokens(mask_tokens) * self.embed_scale
-        components["diherals"] = self.embed_dihedrals(coords)
 
         # GVP encoder
         gvp_out_scalars, gvp_out_vectors = self.gvp_encoder(coords,
-                coord_mask, padding_mask, confidence)
+                padding_mask, confidence, return_node_embeddings_only=True)
+        coord_mask = torch.all(torch.all(torch.isfinite(coords), dim=-1), dim=-1)
+        coords = nan_to_num(coords)
         R = get_rotation_frames(coords)
         # Rotate to local rotation frame for rotation-invariance
         gvp_out_features = torch.cat([
@@ -97,6 +96,8 @@ class GVPTransformerEncoder(nn.Module):
             rotate(gvp_out_vectors, R.transpose(-2, -1)).flatten(-2, -1),
         ], dim=-1)
         components["gvp_out"] = self.embed_gvp_output(gvp_out_features)
+
+        components["diherals"] = self.embed_dihedrals(coords)
 
         components["confidence"] = self.embed_confidence(
              rbf(confidence, 0., 1.))

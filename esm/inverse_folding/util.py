@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data as data
+from tqdm import tqdm
 from typing import Sequence, Tuple, List
 
 from esm.data import BatchConverter
@@ -110,10 +111,13 @@ def get_sequence_loss(model, alphabet, coords, seq):
     batch = [(coords, None, seq)]
     coords, confidence, strs, tokens, padding_mask = batch_converter(batch)
     
-    prev_output_tokens = tokens[:, :-1]
-    target = tokens[:, 1:]
-    target_padding_mask = (target == alphabet.padding_idx)
+    prev_output_tokens = tokens
     logits, _ = model.forward(coords, padding_mask, confidence, prev_output_tokens)
+    # remove bos and eos
+    target = tokens[:, 1:-1]
+    # shift and remove eos
+    logits = logits[:, :, :-2]
+    target_padding_mask = (target == alphabet.padding_idx)
     loss = F.cross_entropy(logits, target, reduction='none')
     loss = loss[0].detach().numpy()
     target_padding_mask = target_padding_mask[0].numpy()
@@ -212,6 +216,69 @@ def normalize(tensor, dim=-1):
     return nan_to_num(
         torch.div(tensor, norm(tensor, dim=dim, keepdim=True))
     )
+
+
+def sample(model, coords, partial_seq=None, temperature=1.0, confidence=None,
+        incremental=True):
+    """
+    Samples sequences based on greedy sampling (no beam search).
+
+    Args:
+        coords: L x 3 x 3 list representing one backbone
+        partial_seq: Optional, partial sequence with mask tokens if part of
+            the sequence is known
+        temperature: sampling temperature, use low temperature for higher
+            sequence recovery and high temperature for higher diversity
+        confidence: optional length L list of confidence scores for coordinates
+        incremental: faster incremental sampling (for Transformer decoder only)
+    """
+    L = len(coords)
+    # Convert to batch format
+    batch_converter = CoordBatchConverter(model.decoder.dictionary)
+    batch_coords, confidence, _, _, padding_mask = (
+        batch_converter([(coords, confidence, None)])
+    )
+    
+    # Start with prepend token
+    mask_idx = model.decoder.dictionary.get_idx('<mask>')
+    sampled_tokens = torch.full((1, 1+L), mask_idx, dtype=int)
+    sampled_tokens[0, 0] = model.decoder.dictionary.get_idx('<cath>')
+    if partial_seq is not None:
+        for i, c in enumerate(partial_seq):
+            sampled_tokens[0, i+1] = model.decoder.dictionary.get_idx(c)
+        
+    if incremental:
+        # Save incremental states for faster sampling
+        incremental_state = dict()
+    
+    # Run encoder only once
+    encoder_out = model.encoder(batch_coords, padding_mask, confidence)
+    
+    # Decode one token at a time
+    for i in tqdm(range(1, L+1), total=L):
+        if sampled_tokens[0, i] != mask_idx:
+            continue
+        if incremental:
+            logits, _ = model.decoder(
+                sampled_tokens[:, :i], 
+                encoder_out,
+                incremental_state=incremental_state,
+            )
+            logits = logits[0].transpose(0, 1)
+        else:
+            logits, _ = model.decoder(
+                sampled_tokens, 
+                encoder_out,
+            )
+            logits = logits[0, :, i-1:i].transpose(0, 1)
+        logits /= temperature
+        probs = F.softmax(logits, dim=-1)
+        sampled_tokens[:, i] = torch.multinomial(probs, 1).squeeze(-1)
+    # Remove bos and eos
+    sampled_seq = sampled_tokens[0, 1:-1]
+    
+    # Convert back to string via lookup
+    return ''.join([model.decoder.dictionary.get_tok(a) for a in sampled_seq])
 
 
 class CoordBatchConverter(BatchConverter):

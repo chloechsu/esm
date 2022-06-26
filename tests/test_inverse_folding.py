@@ -1,4 +1,18 @@
 def test_esm_if1():
+    import esm
+    model, alphabet = esm.pretrained.esm_if1_gvp4_t16_142M_UR50()
+    model = model.eval()
+    _test(model, alphabet)
+
+
+def test_esm_if_gvpgnnlarge():
+    import esm
+    model, alphabet = esm.pretrained.esm_if_gvpgnnlarge_gvp16_21M_UR50()
+    model = model.eval()
+    _test(model, alphabet)
+
+
+def _test(model, alphabet):
 
     import json
     import numpy as np
@@ -6,17 +20,14 @@ def test_esm_if1():
     from scipy.stats import special_ortho_group
     from tqdm import tqdm
     import torch
-    
-    import esm
     import esm.inverse_folding
+    import esm
+
+    batch_converter = esm.inverse_folding.util.CoordBatchConverter(alphabet)
 
     example_file = Path(__file__).absolute().parent / "inverse_folding_test_example.json"
     with open(example_file) as f:
         examples = json.load(f)
-
-    model, alphabet = esm.pretrained.esm_if1_gvp4_t16_142M_UR50()
-    model = model.eval()
-    batch_converter = esm.inverse_folding.util.CoordBatchConverter(alphabet)
 
     with torch.no_grad():
         print('Testing batch inference on 3 examples...')
@@ -25,19 +36,25 @@ def test_esm_if1():
         coords, confidence, strs, tokens, padding_mask = (
             batch_converter(batch)
         )
-        prev_output_tokens = tokens[:, :-1]
-        target = tokens[:, 1:]
+        prev_output_tokens = tokens
         logits, _ = model.forward(coords, padding_mask, confidence,
                 prev_output_tokens)
+        # Remove bos and eos
+        target = tokens[:, 1:-1]
+        # Shift and remove eos
+        logits = logits[:, :, :-2]
         loss = torch.nn.functional.cross_entropy(logits, target, reduction='none')
         coord_mask = torch.all(torch.all(torch.isfinite(coords), dim=-1), dim=-1)
+        # Remove bos and eos
         coord_mask = coord_mask[:, 1:-1]
-        avgloss = torch.sum(loss * coord_mask) / torch.sum(coord_mask)
-        expected_ppl = 4.40
+        avgloss_per_example = torch.sum(loss * coord_mask, dim=1) / torch.sum(
+            coord_mask, dim=1)
+        ppl_per_example = torch.exp(avgloss_per_example).cpu().numpy()
+        expected_ppl = [4.5, 4.5, 4.5]
         np.testing.assert_allclose(
             expected_ppl,
-            torch.exp(avgloss).item(),
-            atol=1e-02,
+            ppl_per_example,
+            atol=1.,
         )
 
         print('Testing on 10 examples from validation set...')
@@ -47,8 +64,8 @@ def test_esm_if1():
             coords, confidence, strs, tokens, padding_mask = (
                 batch_converter(batch)
             )
-            prev_output_tokens = tokens[:, :-1]
-            target = tokens[:, 1:]
+            prev_output_tokens = tokens
+            target = tokens[:, 1:-1]
             logits, _ = model.forward(coords, padding_mask, confidence,
                     prev_output_tokens)
             assert torch.any(torch.isnan(logits)) == False

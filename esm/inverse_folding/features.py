@@ -209,7 +209,7 @@ class DihedralFeatures(nn.Module):
 
 class GVPGraphEmbedding(GVPInputFeaturizer):
 
-    def __init__(self, args):
+    def __init__(self, args, dictionary=None):
         super().__init__()
         self.top_k_neighbors = args.top_k_neighbors
         self.num_positional_embeddings = 16
@@ -229,6 +229,16 @@ class GVPGraphEmbedding(GVPInputFeaturizer):
             LayerNorm(edge_hidden_dim, eps=1e-4)
         )
         self.embed_confidence = nn.Linear(16, args.node_hidden_dim_scalar)
+        self.dictionary = dictionary
+        if getattr(args, "encoder_embed_tokens", False):
+            vocab_size = len(dictionary)
+            self.embed_token = nn.Sequential(
+                torch.nn.Embedding(vocab_size, vocab_size),
+                nn.Linear(vocab_size, node_hidden_dim[0]),
+                nn.LayerNorm(node_hidden_dim[0])
+            )
+        else:
+            self.embed_token = None
 
     def forward(self, coords, coord_mask, padding_mask, confidence):
         with torch.no_grad():
@@ -237,6 +247,13 @@ class GVPGraphEmbedding(GVPInputFeaturizer):
                 coords, coord_mask, padding_mask)
         node_embeddings_scalar, node_embeddings_vector = self.embed_node(node_features)
         edge_embeddings = self.embed_edge(edge_features)
+
+        if self.embed_token is not None:
+            placeholder_tokens = (
+                    ~padding_mask * self.dictionary.get_idx('<mask>') +
+                    padding_mask * self.dictionary.padding_idx
+            )
+            node_embeddings_scalar += self.embed_token(placeholder_tokens)
 
         rbf_rep = rbf(confidence, 0., 1.)
         node_embeddings = (
