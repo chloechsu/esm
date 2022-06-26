@@ -143,6 +143,30 @@ def load_model_and_alphabet_core(model_data, regression_data=None):
             if "version" not in sname
         }
 
+    elif "gvp_mini" in model_data["args"].arch:
+        import esm.inverse_folding
+        model_type = esm.inverse_folding.gvp_gnn.GVPGNNModel 
+        model_args = vars(model_data["args"]) # convert Namespace -> dict
+        model_args["encoder_embed_tokens"] = True
+
+        def update_name(s):
+            # Map the module names in checkpoints trained with internal code to
+            # the updated module names in open source code
+            s = s.replace("W_v", "embed_graph.embed_node")
+            s = s.replace("W_e", "embed_graph.embed_edge")
+            s = s.replace("W_out", "logit_projection")
+            s = s.replace("encoder.embed_score.", "encoder.embed_graph.embed_confidence.")
+            s = s.replace("encoder.W_s", "encoder.embed_graph.embed_token")
+            s = s.replace("decoder.W_s", "decoder.embed_token")
+            s = s.replace("decoder.embed_score", "decoder.embed_confidence")
+            return s
+
+        model_state = {
+            update_name(sname): svalue for sname, svalue in
+            model_data["model"].items()
+            if "version" not in sname
+        }
+
     else:
         raise ValueError("Unknown architecture selected")
 
@@ -304,3 +328,17 @@ def esm_if1_gvp4_t16_142M_UR50():
     Returns a tuple of (Model, Alphabet).
     """
     return load_model_and_alphabet_hub("esm_if1_gvp4_t16_142M_UR50")
+
+
+def esm_if_gvpgnnlarge_gvp16_21M_UR50():
+    """Inverse folding model with 21M params, with 8 GVP-GNN encoder layers and
+    8 GVP-GNN decoder layers, trained on CATH structures and 12 million
+    alphafold2 predicted structures from UniRef50 sequences.
+
+    Returns a tuple of (Model, Alphabet).
+    """
+    model_path = "/home/chloehsu/inverse_opensource/esm_public_fork/esm/tests/esm_if_gvp_gnn_model.pt"
+    model, alphabet = esm.pretrained.load_model_and_alphabet(model_path)
+    return model, alphabet
+    # TODO replace with public path
+    # return load_model_and_alphabet_hub("esm_if_gvpgnn_UR50")

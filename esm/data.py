@@ -162,12 +162,12 @@ class Alphabet(object):
             prepend_bos = True
             append_eos = False
             use_msa = True
-        elif "invariant_gvp" in name.lower():
+        elif "gvp" in name.lower():
             standard_toks = proteinseq_toks["toks"]
             prepend_toks = ("<null_0>", "<pad>", "<eos>", "<unk>")
             append_toks = ("<mask>", "<cath>", "<af2>")
             prepend_bos = True
-            append_eos = False
+            append_eos = True
             use_msa = False
         else:
             raise ValueError("Unknown architecture selected")

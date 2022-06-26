@@ -12,15 +12,16 @@ import torch.nn.functional as F
 from .features import GVPGraphEmbedding
 from .gvp_modules import GVPConvLayer, LayerNorm 
 from .gvp_utils import unflatten_graph
+from .util import nan_to_num
 
 
 
 class GVPEncoder(nn.Module):
 
-    def __init__(self, args):
+    def __init__(self, args, dictionary=None):
         super().__init__()
         self.args = args
-        self.embed_graph = GVPGraphEmbedding(args)
+        self.embed_graph = GVPGraphEmbedding(args, dictionary=dictionary)
 
         node_hidden_dim = (args.node_hidden_dim_scalar,
                 args.node_hidden_dim_vector)
@@ -44,7 +45,11 @@ class GVPEncoder(nn.Module):
             for i in range(args.num_encoder_layers)
         )
 
-    def forward(self, coords, coord_mask, padding_mask, confidence):
+    def forward(self, coords, padding_mask, confidence,
+            return_node_embeddings_only=False):
+        coord_mask = torch.all(torch.all(torch.isfinite(coords), dim=-1), dim=-1)
+        coords = nan_to_num(coords)
+
         node_embeddings, edge_embeddings, edge_index = self.embed_graph(
                 coords, coord_mask, padding_mask, confidence)
         
@@ -52,5 +57,16 @@ class GVPEncoder(nn.Module):
             node_embeddings, edge_embeddings = layer(node_embeddings,
                     edge_index, edge_embeddings)
 
-        node_embeddings = unflatten_graph(node_embeddings, coords.shape[0])
-        return node_embeddings
+        if return_node_embeddings_only:
+            # For use in GVPTransformer
+            node_embeddings = unflatten_graph(node_embeddings, coords.shape[0])
+            return node_embeddings
+        else:
+            # For use in GVPDecoder in GVP-GNN
+            return {
+                'node_embeddings': node_embeddings,
+                'edge_embeddings': edge_embeddings,
+                'edge_index': edge_index,
+                'confidence': confidence,
+                'batch_size': coords.shape[0],
+            }

@@ -4,4 +4,6 @@
 # LICENSE file in the root directory of this source tree.
 
 from . import gvp_transformer
+from . import gvp_gnn
 from . import util
+from . import multichain_util

@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data as data
+from tqdm import tqdm
 from typing import Sequence, Tuple, List
 
 from esm.data import BatchConverter
@@ -28,7 +29,7 @@ def load_structure(fpath, chain=None):
     """
     Args:
         fpath: filepath to either pdb or cif file
-        chain: the chain id
+        chain: the chain id or list of chain ids to load
     Returns:
         biotite.structure.AtomArray
     """
@@ -42,16 +43,20 @@ def load_structure(fpath, chain=None):
         structure = pdb.get_structure(pdbf, model=1)
     bbmask = filter_backbone(structure)
     structure = structure[bbmask]
-    chains = get_chains(structure)
-    print(f'Found {len(chains)} chains:', chains, '\n')
-    if len(chains) == 0:
+    all_chains = get_chains(structure)
+    if len(all_chains) == 0:
         raise ValueError('No chains found in the input file.')
     if chain is None:
-        chain = chains[0]
-    if chain not in chains:
-        raise ValueError(f'Chain {chain} not found in input file')
-    structure = structure[structure.chain_id == chain]
-    print(f'Loaded chain {chain}\n')
+        chain_ids = all_chains
+    elif isinstance(chain, list):
+        chain_ids = chain
+    else:
+        chain_ids = [chain] 
+    for chain in chain_ids:
+        if chain not in all_chains:
+            raise ValueError(f'Chain {chain} not found in input file')
+    chain_filter = [a.chain_id in chain_ids for a in structure]
+    structure = structure[chain_filter]
     return structure
 
 
@@ -101,25 +106,30 @@ def get_atom_coords_residuewise(atoms: List[str], struct: biotite.structure.Atom
     return biotite.structure.apply_residue_wise(struct, struct, filterfn)
 
 
-def score_sequence(model, alphabet, coords, seq):
+def get_sequence_loss(model, alphabet, coords, seq):
     batch_converter = CoordBatchConverter(alphabet)
     batch = [(coords, None, seq)]
     coords, confidence, strs, tokens, padding_mask = batch_converter(batch)
     
-    prev_output_tokens = tokens[:, :-1]
-    target = tokens[:, 1:]
-    target_padding_mask = (target == alphabet.padding_idx)
+    prev_output_tokens = tokens
     logits, _ = model.forward(coords, padding_mask, confidence, prev_output_tokens)
+    # remove bos and eos
+    target = tokens[:, 1:-1]
+    # shift and remove eos
+    logits = logits[:, :, :-2]
+    target_padding_mask = (target == alphabet.padding_idx)
     loss = F.cross_entropy(logits, target, reduction='none')
-    
-    avgloss = torch.sum(loss * ~target_padding_mask, dim=-1) / torch.sum(~target_padding_mask, dim=-1)
-    ll_fullseq = -avgloss.detach().numpy().item()
+    loss = loss[0].detach().numpy()
+    target_padding_mask = target_padding_mask[0].numpy()
+    return loss, target_padding_mask
 
-    coord_mask = torch.all(torch.all(torch.isfinite(coords), dim=-1), dim=-1)
-    coord_mask = coord_mask[:, 1:-1]
-    avgloss = torch.sum(loss * coord_mask, dim=-1) / torch.sum(coord_mask, dim=-1)
-    ll_withcoord = -avgloss.detach().numpy().item()
 
+def score_sequence(model, alphabet, coords, seq):
+    loss, target_padding_mask = get_sequence_loss(model, alphabet, coords, seq)
+    ll_fullseq = -np.sum(loss * ~target_padding_mask) / np.sum(~target_padding_mask)
+    # Also calculate average when excluding masked portions
+    coord_mask = np.all(np.isfinite(coords), axis=(-1, -2))
+    ll_withcoord = -np.sum(loss * coord_mask) / np.sum(coord_mask)
     return ll_fullseq, ll_withcoord
 
 
@@ -206,6 +216,69 @@ def normalize(tensor, dim=-1):
     return nan_to_num(
         torch.div(tensor, norm(tensor, dim=dim, keepdim=True))
     )
+
+
+def sample(model, coords, partial_seq=None, temperature=1.0, confidence=None,
+        incremental=True):
+    """
+    Samples sequences based on greedy sampling (no beam search).
+
+    Args:
+        coords: L x 3 x 3 list representing one backbone
+        partial_seq: Optional, partial sequence with mask tokens if part of
+            the sequence is known
+        temperature: sampling temperature, use low temperature for higher
+            sequence recovery and high temperature for higher diversity
+        confidence: optional length L list of confidence scores for coordinates
+        incremental: faster incremental sampling (for Transformer decoder only)
+    """
+    L = len(coords)
+    # Convert to batch format
+    batch_converter = CoordBatchConverter(model.decoder.dictionary)
+    batch_coords, confidence, _, _, padding_mask = (
+        batch_converter([(coords, confidence, None)])
+    )
+    
+    # Start with prepend token
+    mask_idx = model.decoder.dictionary.get_idx('<mask>')
+    sampled_tokens = torch.full((1, 1+L), mask_idx, dtype=int)
+    sampled_tokens[0, 0] = model.decoder.dictionary.get_idx('<cath>')
+    if partial_seq is not None:
+        for i, c in enumerate(partial_seq):
+            sampled_tokens[0, i+1] = model.decoder.dictionary.get_idx(c)
+        
+    if incremental:
+        # Save incremental states for faster sampling
+        incremental_state = dict()
+    
+    # Run encoder only once
+    encoder_out = model.encoder(batch_coords, padding_mask, confidence)
+    
+    # Decode one token at a time
+    for i in tqdm(range(1, L+1), total=L):
+        if sampled_tokens[0, i] != mask_idx:
+            continue
+        if incremental:
+            logits, _ = model.decoder(
+                sampled_tokens[:, :i], 
+                encoder_out,
+                incremental_state=incremental_state,
+            )
+            logits = logits[0].transpose(0, 1)
+        else:
+            logits, _ = model.decoder(
+                sampled_tokens, 
+                encoder_out,
+            )
+            logits = logits[0, :, i-1:i].transpose(0, 1)
+        logits /= temperature
+        probs = F.softmax(logits, dim=-1)
+        sampled_tokens[:, i] = torch.multinomial(probs, 1).squeeze(-1)
+    # Remove bos and eos
+    sampled_seq = sampled_tokens[0, 1:-1]
+    
+    # Convert back to string via lookup
+    return ''.join([model.decoder.dictionary.get_tok(a) for a in sampled_seq])
 
 
 class CoordBatchConverter(BatchConverter):
