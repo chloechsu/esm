@@ -96,6 +96,11 @@ def main():
             '--chain', type=str,
             help='chain id for the chain of interest', default='A',
     )
+    parser.add_argument(
+            '--architecture', type=str,
+            help='model architecture (gvptransformer or gvpgnnlarge)',
+            default='gvptransformer',
+    )
     parser.set_defaults(multichain_backbone=False)
     parser.add_argument(
             '--multichain-backbone', action='store_true',
@@ -108,7 +113,13 @@ def main():
     )
     args = parser.parse_args()
 
-    model, alphabet = esm.pretrained.esm_if1_gvp4_t16_142M_UR50()
+    if args.architecture == 'gvptransformer':
+        model, alphabet = esm.pretrained.esm_if1_gvp4_t16_142M_UR50()
+    elif args.architecture == 'gvpgnnlarge':
+        model, alphabet = esm.pretrained.esm_if_gvpgnnlarge_gvp16_21M_UR50()
+    else:
+        raise ValueError('Unknown model architecture')
+
     model = model.eval()
 
     if args.multichain_backbone:
